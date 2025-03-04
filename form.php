@@ -19,7 +19,105 @@ $error = $_GET["error"] ?? false;
 
 $db = new PDO("sqlite:database.db");
 
+$statement = $db->query('CREATE TABLE IF NOT EXISTS `posts` (
+	`id` integer primary key,
+	`title` VARCHAR NOT NULL,
+	`content` TEXT NOT NULL
+);');
+
+$statement = $db->query('CREATE TABLE IF NOT EXISTS `users` (
+	`id` integer primary key,
+	`nickname` VARCHAR NOT NULL,
+	`email` VARCHAR NOT NULL,
+	`password` VARCHAR NOT NULL
+);');
+
 $method = $_SERVER['REQUEST_METHOD'];
+
+session_start();
+
+// Register
+if ($action == 'register' && $method == 'POST') {
+    $nickname = trim($_POST['nickname'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $password = trim($_POST['password'] ?? '');
+
+    if (! $nickname) {
+        $_SESSION['errors']['nickname'] = 'Введите никнейм для регистрации';
+    }
+
+    if (! $email) {
+        $_SESSION['errors']['email'] = 'Введите E-mail для регистрации';
+    }
+
+    if (! $password) {
+        $_SESSION['errors']['password'] = 'Введите пароль для регистрации';
+    }
+
+    if ($_SESSION['errors']) {
+        $_SESSION['old']['nickname'] = $nickname;
+        $_SESSION['old']['email'] = $email;
+
+        header('Location: /');
+        exit;
+    }
+
+    $password = password_hash($password, PASSWORD_DEFAULT);
+
+    $statement = $db->prepare("INSERT INTO users (nickname, email, password) values (?, ?, ?);");
+    $statement->execute([$nickname, $email, $password]);
+
+    $_SESSION['messages'][] = 'Вы успешно зарегистрировались';
+
+    unset($_SESSION['old']);
+
+    header('Location: /');
+    exit;
+}
+
+// Login
+if ($action == 'login' && $method == 'POST') {
+    $email = trim($_POST['email'] ?? '');
+    $password = trim($_POST['password'] ?? '');
+
+    if (! $email) {
+        $_SESSION['errors']['email'] = 'Введите E-mail для входа';
+    }
+
+    if (! $password) {
+        $_SESSION['errors']['password'] = 'Введите пароль для входа';
+    }
+
+    if ($_SESSION['errors']) {
+        $_SESSION['old']['email'] = $email;
+
+        header('Location: /');
+        exit;
+    }
+
+    $statement = $db->prepare("SELECT nickname, password FROM users WHERE email=?");
+    $statement->execute([$email]);
+    $user = $statement->fetch(PDO::FETCH_ASSOC);
+
+    if (password_verify($password, $user['password'])) {
+        $_SESSION['nickname'] = $user['nickname'];
+        $_SESSION['messages'][] = 'Вы успешно вошли';
+    } else {
+        $_SESSION['errors'][] = 'Не удалось войти (неверный логин или пароль)';
+    }
+
+    unset($_SESSION['old']);
+
+    header('Location: /');
+    exit;
+}
+
+// Logout
+if ($action == 'logout' && $method == 'GET') {
+    session_destroy();
+    header('Location: /');
+    exit;
+}
 
 //CRUD -> Update
 if ($action == 'update') {
@@ -102,17 +200,106 @@ $posts = $statement->fetchAll(PDO::FETCH_ASSOC);
             <h1>Create Post</h1>
         <?php endif; ?>
 
-        <?php if ($success): ?>
-            <div class="alert alert-success alert-dismissible fade show" role="alert">
-                <?= $message ?>
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
+        <?php if ($_SESSION['messages']): ?>
+            <?php foreach ($_SESSION['messages'] as $message): ?>
+                <div class="alert alert-success alert-dismissible fade show" role="alert">
+                    <p><?= $message ?></p>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            <?php endforeach; ?>
         <?php endif; ?>
-        <?php if ($error): ?>
-            <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                <?= $message ?>
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
+
+        <?php if ($_SESSION['errors']): ?>
+            <?php foreach ($_SESSION['errors'] as $error): ?>
+                <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                    <p><?= $error ?></p>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
+
+        <?php if (! isset($_SESSION['nickname'])): ?>
+            <hr>
+
+            <h2>Регистрация</h2>
+            <form method="POST" action="/?action=register">
+                <!-- Поле Nickname -->
+                <div class="mb-3">
+                    <label for="nickname" class="form-label">Nickname</label>
+                    <input type="text" class="form-control <?php if ($_SESSION['errors']['nickname']): ?>is-invalid<?php endif; ?>" id="nickname" name="nickname" value="<?= $_SESSION['old']['nickname'] ?? '' ?>">
+
+                    <?php if ($_SESSION['errors']['nickname']): ?>
+                        <div class="invalid-feedback">
+                            Введите никнейм
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Поле Email -->
+                <div class="mb-3">
+                    <label for="email" class="form-label">Email</label>
+                    <input type="email" class="form-control <?php if ($_SESSION['errors']['email']): ?>is-invalid<?php endif; ?>" id="email" name="email" value="<?= $_SESSION['old']['email'] ?? '' ?>" autocomplete="off">
+
+                    <?php if ($_SESSION['errors']['email']): ?>
+                        <div class="invalid-feedback">
+                            Введите email
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Поле Password -->
+                <div class="mb-3">
+                    <label for="password" class="form-label">Password</label>
+                    <input type="password" class="form-control <?php if ($_SESSION['errors']['password']): ?>is-invalid<?php endif; ?>" id="password" name="password">
+
+                    <?php if ($_SESSION['errors']['password']): ?>
+                        <div class="invalid-feedback">
+                            Введите пароль
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Кнопка отправки формы -->
+                <button type="submit" class="btn btn-primary">Зарегистрироваться</button>
+            </form>
+
+            <hr>
+
+            <h2>Вход</h2>
+            <form method="POST" action="/?action=login">
+                <!-- Поле Email -->
+                <div class="mb-3">
+                    <label for="email" class="form-label">Email</label>
+                    <input type="email" class="form-control <?php if ($_SESSION['errors']['email']): ?>is-invalid<?php endif; ?>" id="email" name="email" value="<?= $_SESSION['old']['email'] ?? '' ?>">
+
+                    <?php if ($_SESSION['errors']['email']): ?>
+                        <div class="invalid-feedback">
+                            Введите email
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Поле Password -->
+                <div class="mb-3">
+                    <label for="password" class="form-label">Password</label>
+                    <input type="password" class="form-control <?php if ($_SESSION['errors']['password']): ?>is-invalid<?php endif; ?>" id="password" name="password">
+
+                    <?php if ($_SESSION['errors']['password']): ?>
+                        <div class="invalid-feedback">
+                            Введите пароль
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Кнопка отправки формы -->
+                <button type="submit" class="btn btn-primary">Войти</button>
+            </form>
+
+            <hr>
+        <?php else: ?>
+            <h2>Вы вошли как: <?= $_SESSION['nickname'] ?></h2>
+            <a style="width: 150px" href="/?action=logout" class="btn btn-danger">Выйти</a>
+            <hr>
         <?php endif; ?>
 
         <form method="POST" action="/?action=<?= $formActionText ?>">
@@ -168,7 +355,10 @@ $posts = $statement->fetchAll(PDO::FETCH_ASSOC);
             </div><br>
         <?php endforeach; ?>
     </div>
-
+    <?php
+    unset($_SESSION['messages']);
+    unset($_SESSION['errors']);
+    ?>
     <!-- Подключаем Bootstrap JS (необязательно, если не используете JS-компоненты) -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
