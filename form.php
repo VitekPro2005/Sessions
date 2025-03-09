@@ -1,8 +1,25 @@
 <?php
 session_start();
-
 $dbSource = __DIR__ . '/blogsWithCategories.db';
 $db = new PDO("sqlite:$dbSource");
+
+if (!isset($_SESSION['nickname']) && isset($_COOKIE['token'])) {
+    $randomToken = $_COOKIE['token'];
+
+    $statement = $db->prepare("SELECT id, nickname FROM users WHERE token = ?");
+    $statement->execute([$randomToken]);
+    $user = $statement->fetch(PDO::FETCH_ASSOC);
+
+    if ($user) {
+        $_SESSION['nickname'] = $user['nickname'];
+    } else {
+        setcookie('token', '', time() - 3600, '/');
+    }
+}
+
+function Authenticated() {
+    return isset($_SESSION['nickname']);
+}
 
 $messages = [
     'default' => '',
@@ -41,12 +58,12 @@ $db->query('CREATE TABLE IF NOT EXISTS `posts` (
     `category_id` INTEGER,
     FOREIGN KEY (category_id) REFERENCES categories(id)
 );');
-
 $db->query('CREATE TABLE IF NOT EXISTS `users` (
     `id` integer primary key,
     `nickname` VARCHAR NOT NULL,
     `email` VARCHAR NOT NULL,
-    `password` VARCHAR NOT NULL
+    `password` VARCHAR NOT NULL,
+    `token` VARCHAR
 );');
 // Получение категорий
 $categories = $db->query("SELECT * FROM categories")->fetchAll(PDO::FETCH_ASSOC);
@@ -96,6 +113,7 @@ if ($action == 'register' && $method == 'POST') {
 if ($action == 'login' && $method == 'POST') {
     $email = trim($_POST['email'] ?? '');
     $password = trim($_POST['password'] ?? '');
+    $remember = isset($_POST['remember']);
 
     if (!$email) {
         $_SESSION['errors']['email'] = 'Введите E-mail для входа';
@@ -119,18 +137,37 @@ if ($action == 'login' && $method == 'POST') {
     if (password_verify($password, $user['password'])) {
         $_SESSION['nickname'] = $user['nickname'];
         $_SESSION['messages'][] = 'Вы успешно вошли';
+        if ($remember) {
+            $randomToken = bin2hex(random_bytes(32));
+            $expires = time() + 3600;
+
+            $statement = $db->prepare("UPDATE users SET token = ? WHERE id = ?");
+            $statement->execute([$randomToken, $user['id']]);
+
+            setcookie('token', $randomToken, $expires, '/');
+        }
+
+        unset($_SESSION['old']);
+
+        header('Location: /form.php');
+        exit;
     } else {
         $_SESSION['errors'][] = 'Не удалось войти (неверный логин или пароль)';
+        unset($_SESSION['old']);
+
+        header('Location: /form.php');
+        exit;
     }
-
-    unset($_SESSION['old']);
-
-    header('Location: /form.php');
-    exit;
 }
 
 // Выход
 if ($action == 'logout' && $method == 'GET') {
+    if (isset($_SESSION['nickname'])) {
+        $statement = $db->prepare("UPDATE users SET token = NULL WHERE nickname = ?");
+        $statement->execute([$_SESSION['nickname']]);
+    }
+
+    setcookie('token', '', time() - 3600, '/');
     session_destroy();
     header('Location: /form.php');
     exit;
@@ -138,6 +175,11 @@ if ($action == 'logout' && $method == 'GET') {
 
 // CRUD -> Update
 if ($action == 'update') {
+    if (!Authenticated()) {
+        $_SESSION['errors'][] = 'Для создания поста необходимо авторизоваться';
+        header('Location: /form.php');
+        exit;
+    }
     $id = (int)$_GET["id"] ?? 0;
     $statement = $db->prepare("SELECT * from posts where id = ?");
     $statement->execute([$id]);
@@ -156,6 +198,11 @@ if ($action == 'update') {
 
 // CRUD -> Save (Update)
 if ($action == 'save' && $method == 'POST') {
+    if (!Authenticated()) {
+        $_SESSION['errors'][] = 'Для создания поста необходимо авторизоваться';
+        header('Location: /form.php');
+        exit;
+    }
     $id = (int)$_POST["id"] ?? 0;
     $title = $_POST['title'] ?? '';
     $content = $_POST['content'] ?? '';
@@ -191,6 +238,11 @@ if ($action == 'save' && $method == 'POST') {
 
 // CRUD -> Delete
 if ($action == 'delete') {
+    if (!Authenticated()) {
+        $_SESSION['errors'][] = 'Для создания поста необходимо авторизоваться';
+        header('Location: /form.php');
+        exit;
+    }
     $id = (int)$_GET["id"] ?? 0;
 
     $statement = $db->prepare("SELECT * from posts where id = ?");
@@ -210,6 +262,11 @@ if ($action == 'delete') {
 
 // CRUD -> Create
 if ($action == 'create' && $method == 'POST') {
+    if (!Authenticated()) {
+        $_SESSION['errors'][] = 'Для создания поста необходимо авторизоваться';
+        header('Location: /form.php');
+        exit;
+    }
     $title = $_POST['title'] ?? '';
     $content = $_POST['content'] ?? '';
     $category_id = (int)$_POST['category_id'] ?? 0;
@@ -250,7 +307,7 @@ $posts = $statement->fetchAll(PDO::FETCH_ASSOC);
 <div class="container mt-5">
     <h1>Create Post</h1>
 
-    <?php if ($_SESSION['messages'] ?? false): ?>
+    <?php if (isset($_SESSION['messages'])): ?>
         <div class="alert alert-success alert-dismissible fade show" role="alert">
             <?php foreach ($_SESSION['messages'] as $message): ?>
                 <?= $message ?><br>
@@ -313,6 +370,10 @@ $posts = $statement->fetchAll(PDO::FETCH_ASSOC);
                     <div class="invalid-feedback">Введите пароль</div>
                 <?php endif; ?>
             </div>
+            <div class="mb-3 form-check">
+                <input type="checkbox" class="form-check-input" id="remember" name="remember">
+                <label class="form-check-label" for="remember">Запомнить меня</label>
+            </div>
             <button type="submit" class="btn btn-primary">Войти</button>
         </form>
         <hr>
@@ -321,7 +382,7 @@ $posts = $statement->fetchAll(PDO::FETCH_ASSOC);
         <a style="width: 150px" href="/form.php?action=logout" class="btn btn-danger">Выйти</a>
         <hr>
     <?php endif; ?>
-
+<?php if (Authenticated()): ?>
     <form method="POST" action="/form.php?action=<?= $formActionText ?>">
         <input type="text" name="id" value="<?= $post['id'] ?? 0 ?>" hidden>
 
@@ -360,6 +421,7 @@ $posts = $statement->fetchAll(PDO::FETCH_ASSOC);
 
         <button type="submit" class="btn btn-primary"><?= $formSubmitText ?></button>
     </form>
+<?php endif; ?>
     <br>
     <?php foreach ($posts as $post): ?>
         <div class="card">
